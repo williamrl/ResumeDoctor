@@ -7,10 +7,16 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({
-  origin: '*',
-  credentials: true
-}));
+// Configure CORS to reflect the requesting origin. In production, set
+// ALLOWED_ORIGIN to your frontend URL (e.g. https://your-frontend.vercel.app)
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGIN || true,
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+// Enable preflight across the board
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 
