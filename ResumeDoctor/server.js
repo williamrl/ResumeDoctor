@@ -6,20 +6,20 @@ import Anthropic from '@anthropic-ai/sdk';
 dotenv.config();
 
 const app = express();
-const client = new Anthropic();
 
-// Middleware
+// Middleware with higher limits
 app.use(cors());
-app.use(express.json());
-
-// Simple in-memory storage
-const users = new Map();
-const userStats = new Map();
+app.use(express.json({ limit: '50mb' }));
+app.use(express.text({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
+
+// Simple in-memory storage
+const users = new Map();
 
 // Register
 app.post('/api/auth/register', (req, res) => {
@@ -36,15 +36,11 @@ app.post('/api/auth/register', (req, res) => {
     
     const userId = Date.now().toString();
     users.set(email, { userId, name, password });
-    userStats.set(userId, { used: 0, limit: 2, plan: 'free' });
     
     res.json({ 
       success: true, 
       userId, 
-      name,
-      plan: 'free',
-      limit: 2,
-      used: 0
+      name
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -67,15 +63,10 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    const stats = userStats.get(user.userId);
-    
     res.json({ 
       success: true, 
       userId: user.userId, 
-      name: user.name,
-      plan: stats.plan,
-      limit: stats.limit,
-      used: stats.used
+      name: user.name
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -83,33 +74,29 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-// Tailor resume
+// Tailor resume with user's API key
 app.post('/api/tailor-resume', async (req, res) => {
   try {
-    const { userId, resumeContent, jobDescription } = req.body;
+    const { userId, resumeContent, jobDescription, apiKey } = req.body;
     
-    if (!userId || !resumeContent || !jobDescription) {
+    if (!userId || !jobDescription || !apiKey) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
     
-    const stats = userStats.get(userId);
-    
-    if (!stats) {
+    const user = users.get(Array.from(users.entries()).find(([, u]) => u.userId === userId)?.[0]);
+    if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    
-    if (stats.plan === 'free' && stats.used >= stats.limit) {
-      return res.status(403).json({ 
-        error: 'Free limit reached',
-        used: stats.used,
-        limit: stats.limit
-      });
-    }
-    
+
+    // Use user's API key
+    const client = new Anthropic({
+      apiKey: apiKey
+    });
+
     const prompt = `You are an expert resume writer. Tailor this resume to match the job requirements perfectly.
 
-ORIGINAL RESUME:
-${resumeContent}
+${resumeContent ? `ORIGINAL RESUME:
+${resumeContent}` : 'NO RESUME PROVIDED - Create a professional resume format'}
 
 JOB DESCRIPTION:
 ${jobDescription}
@@ -130,50 +117,25 @@ Return the tailored resume now:`;
       max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }]
     });
-    
+
     const tailoredResume = message.content[0].text;
-    
-    // Update stats
-    stats.used += 1;
-    userStats.set(userId, stats);
-    
+
     res.json({
       success: true,
-      tailoredResume,
-      used: stats.used,
-      limit: stats.limit,
-      remaining: Math.max(0, stats.limit - stats.used)
+      tailoredResume
     });
     
   } catch (error) {
     console.error('Tailor resume error:', error);
-    res.status(500).json({ error: 'Error tailoring resume' });
-  }
-});
-
-// Get user stats
-app.get('/api/user/:userId', (req, res) => {
-  try {
-    const { userId } = req.params;
-    const stats = userStats.get(userId);
     
-    if (!stats) {
-      return res.status(404).json({ error: 'User not found' });
+    if (error.status === 401) {
+      return res.status(401).json({ error: 'Invalid API key' });
     }
     
-    res.json({
-      plan: stats.plan,
-      used: stats.used,
-      limit: stats.limit,
-      remaining: Math.max(0, stats.limit - stats.used)
-    });
-  } catch (error) {
-    console.error('Get user error:', error);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: error.message || 'Error tailoring resume' });
   }
 });
 
-// Start server
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
