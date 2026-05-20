@@ -6,14 +6,12 @@ import Anthropic from '@anthropic-ai/sdk';
 dotenv.config();
 
 const app = express();
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
 
 app.use(cors({
   origin: '*',
   credentials: true
 }));
+
 app.use(express.json());
 
 // Mock user storage (in production, use real database)
