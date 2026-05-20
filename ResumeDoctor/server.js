@@ -11,7 +11,7 @@ const client = new Anthropic({
 });
 
 app.use(cors({
-  origin: ['https://resumedoctor-lilac.vercel.app', 'http://localhost:3000'],
+  origin: '*',
   credentials: true
 }));
 app.use(express.json());
