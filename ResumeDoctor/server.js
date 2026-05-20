@@ -10,7 +10,10 @@ const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-app.use(cors());
+app.use(cors({
+  origin: ['https://resumedoctor-lilac.vercel.app', 'http://localhost:3000'],
+  credentials: true
+}));
 app.use(express.json());
 
 // Mock user storage (in production, use real database)
