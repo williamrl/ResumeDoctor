@@ -18,6 +18,33 @@ app.get('/health', (req, res) => {
 
 const users = new Map();
 
+// Validate API key
+async function validateApiKey(apiKey) {
+  try {
+    const client = new Anthropic({ apiKey });
+    
+    // Make a minimal test call
+    const message = await client.messages.create({
+      model: 'claude-3-5-haiku-20241022',
+      max_tokens: 10,
+      messages: [{ role: 'user', content: 'test' }]
+    });
+
+    return { valid: true, error: null };
+  } catch (error) {
+    if (error.status === 401) {
+      return { valid: false, error: 'Invalid API key. Please check and try again.' };
+    }
+    if (error.status === 429) {
+      return { valid: false, error: 'API rate limited. Please try again later.' };
+    }
+    if (error.message && error.message.includes('credit')) {
+      return { valid: false, error: 'Insufficient credits. Please add credits to your Claude account.' };
+    }
+    return { valid: false, error: 'API key validation failed. Please check your key.' };
+  }
+}
+
 app.post('/api/auth/register', (req, res) => {
   try {
     const { email, password, name } = req.body;
@@ -61,17 +88,34 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
+// Validate API key endpoint
+app.post('/api/validate-key', async (req, res) => {
+  try {
+    const { apiKey } = req.body;
+    
+    if (!apiKey) {
+      return res.status(400).json({ error: 'No API key provided' });
+    }
+
+    const validation = await validateApiKey(apiKey);
+    
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    res.json({ valid: true });
+  } catch (error) {
+    console.error('Validation error:', error);
+    res.status(500).json({ error: 'Validation failed' });
+  }
+});
+
 // Strip resume to essentials only
 function stripResume(resume) {
   if (!resume) return '';
   
-  // Remove extra whitespace, multiple newlines
   let stripped = resume.replace(/\n{3,}/g, '\n\n').trim();
-  
-  // Keep only lines with substance (remove empty lines, random formatting)
   let lines = stripped.split('\n').filter(line => line.trim().length > 0);
-  
-  // Keep first 800 chars (essentials only)
   return lines.join('\n').substring(0, 800);
 }
 
@@ -142,7 +186,6 @@ app.post('/api/tailor-resume', async (req, res) => {
       try {
         const response = await fetch(jobUrl);
         const html = await response.text();
-        // Basic extraction - get first 2000 chars of text content
         finalJobDescription = html.substring(0, 2000);
       } catch (err) {
         return res.status(400).json({ error: 'Could not extract job from URL. Please paste description.' });
@@ -173,7 +216,11 @@ app.post('/api/tailor-resume', async (req, res) => {
     console.error('Error:', error);
     
     if (error.status === 401) {
-      return res.status(401).json({ error: 'Invalid API key' });
+      return res.status(401).json({ error: 'Invalid API key. Please check your key.' });
+    }
+
+    if (error.message && error.message.includes('credit')) {
+      return res.status(402).json({ error: 'Insufficient credits. Please add credits to your Claude account at console.anthropic.com' });
     }
     
     res.status(500).json({ error: error.message || 'Error tailoring resume' });
