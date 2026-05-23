@@ -2,10 +2,13 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
+import Stripe from 'stripe';
 
 dotenv.config();
 
 const app = express();
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -17,33 +20,7 @@ app.get('/health', (req, res) => {
 });
 
 const users = new Map();
-
-// Validate API key
-async function validateApiKey(apiKey) {
-  try {
-    const client = new Anthropic({ apiKey });
-    
-    // Make a minimal test call
-    const message = await client.messages.create({
-      model: 'claude-3-5-haiku-20241022',
-      max_tokens: 10,
-      messages: [{ role: 'user', content: 'test' }]
-    });
-
-    return { valid: true, error: null };
-  } catch (error) {
-    if (error.status === 401) {
-      return { valid: false, error: 'Invalid API key. Please check and try again.' };
-    }
-    if (error.status === 429) {
-      return { valid: false, error: 'API rate limited. Please try again later.' };
-    }
-    if (error.message && error.message.includes('credit')) {
-      return { valid: false, error: 'Insufficient credits. Please add credits to your Claude account.' };
-    }
-    return { valid: false, error: 'API key validation failed. Please check your key.' };
-  }
-}
+const userTailors = new Map();
 
 app.post('/api/auth/register', (req, res) => {
   try {
@@ -59,8 +36,9 @@ app.post('/api/auth/register', (req, res) => {
     
     const userId = Date.now().toString();
     users.set(email, { userId, name, password });
+    userTailors.set(userId, 0);
     
-    res.json({ success: true, userId, name });
+    res.json({ success: true, userId, name, tailorsAvailable: 0 });
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -81,49 +59,92 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    res.json({ success: true, userId: user.userId, name: user.name });
+    const tailorsAvailable = userTailors.get(user.userId) || 0;
+    
+    res.json({ 
+      success: true, 
+      userId: user.userId, 
+      name: user.name,
+      tailorsAvailable
+    });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Validate API key endpoint
-app.post('/api/validate-key', async (req, res) => {
+app.post('/api/create-checkout', async (req, res) => {
   try {
-    const { apiKey } = req.body;
+    const { userId } = req.body;
     
-    if (!apiKey) {
-      return res.status(400).json({ error: 'No API key provided' });
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing user ID' });
     }
 
-    const validation = await validateApiKey(apiKey);
-    
-    if (!validation.valid) {
-      return res.status(400).json({ error: validation.error });
-    }
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price: process.env.STRIPE_PRICE_ID,
+        quantity: 1
+      }],
+      mode: 'payment',
+      success_url: `${process.env.FRONTEND_URL}?payment=success&userId=${userId}`,
+      cancel_url: process.env.FRONTEND_URL,
+      metadata: { userId }
+    });
 
-    res.json({ valid: true });
+    res.json({ sessionId: session.id });
   } catch (error) {
-    console.error('Validation error:', error);
-    res.status(500).json({ error: 'Validation failed' });
+    console.error('Checkout error:', error);
+    res.status(500).json({ error: 'Checkout failed' });
   }
 });
 
-// Strip resume to essentials only
+app.post('/api/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  try {
+    const sig = req.headers['stripe-signature'];
+    const event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      const userId = session.metadata.userId;
+      
+      const currentTailors = userTailors.get(userId) || 0;
+      userTailors.set(userId, currentTailors + 1);
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(400).json({ error: 'Webhook failed' });
+  }
+});
+
+app.get('/api/user/:userId/tailors', (req, res) => {
+  try {
+    const { userId } = req.params;
+    const tailorsAvailable = userTailors.get(userId) || 0;
+    
+    res.json({ tailorsAvailable });
+  } catch (error) {
+    console.error('Get tailors error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 function stripResume(resume) {
   if (!resume) return '';
-  
   let stripped = resume.replace(/\n{3,}/g, '\n\n').trim();
   let lines = stripped.split('\n').filter(line => line.trim().length > 0);
   return lines.join('\n').substring(0, 800);
 }
 
-// Extract key job requirements (step 1 - cheap)
-async function extractJobRequirements(jobDescription, apiKey) {
+async function extractJobRequirements(jobDescription) {
   try {
-    const client = new Anthropic({ apiKey });
-    
     const message = await client.messages.create({
       model: 'claude-3-5-haiku-20241022',
       max_tokens: 400,
@@ -143,11 +164,8 @@ ${jobDescription.substring(0, 1000)}`
   }
 }
 
-// Tailor resume (step 2 - uses extracted requirements)
-async function tailorResumeWithRequirements(resume, requirements, apiKey) {
+async function tailorResumeWithRequirements(resume, requirements) {
   try {
-    const client = new Anthropic({ apiKey });
-    
     const message = await client.messages.create({
       model: 'claude-3-5-haiku-20241022',
       max_tokens: 1200,
@@ -170,18 +188,21 @@ ${resume}`
   }
 }
 
-// Main tailor endpoint
 app.post('/api/tailor-resume', async (req, res) => {
   try {
-    const { userId, resumeContent, jobDescription, jobUrl, apiKey } = req.body;
+    const { userId, resumeContent, jobDescription, jobUrl } = req.body;
     
-    if (!userId || !apiKey) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!userId) {
+      return res.status(400).json({ error: 'Missing user ID' });
+    }
+
+    const tailorsAvailable = userTailors.get(userId) || 0;
+    if (tailorsAvailable <= 0) {
+      return res.status(403).json({ error: 'No tailors available. Purchase one first.' });
     }
 
     let finalJobDescription = jobDescription;
     
-    // Extract from URL if provided
     if (jobUrl && !jobDescription) {
       try {
         const response = await fetch(jobUrl);
@@ -196,33 +217,20 @@ app.post('/api/tailor-resume', async (req, res) => {
       return res.status(400).json({ error: 'Please provide job description or URL' });
     }
 
-    const user = users.get(Array.from(users.entries()).find(([, u]) => u.userId === userId)?.[0]);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Strip resume to essentials
     const strippedResume = stripResume(resumeContent);
+    const requirements = await extractJobRequirements(finalJobDescription);
+    const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements);
 
-    // Step 1: Extract requirements (cheap)
-    const requirements = await extractJobRequirements(finalJobDescription, apiKey);
+    userTailors.set(userId, tailorsAvailable - 1);
 
-    // Step 2: Tailor resume (uses requirements instead of full job description)
-    const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements, apiKey);
-
-    res.json({ success: true, tailoredResume });
+    res.json({ 
+      success: true, 
+      tailoredResume,
+      tailorsRemaining: tailorsAvailable - 1
+    });
     
   } catch (error) {
     console.error('Error:', error);
-    
-    if (error.status === 401) {
-      return res.status(401).json({ error: 'Invalid API key. Please check your key.' });
-    }
-
-    if (error.message && error.message.includes('credit')) {
-      return res.status(402).json({ error: 'Insufficient credits. Please add credits to your Claude account at console.anthropic.com' });
-    }
-    
     res.status(500).json({ error: error.message || 'Error tailoring resume' });
   }
 });
