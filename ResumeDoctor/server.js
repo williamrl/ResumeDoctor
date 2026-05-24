@@ -152,7 +152,7 @@ function stripResume(resume) {
 async function extractJobRequirements(jobDescription) {
   try {
     const message = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-3-haiku-20240307',
       max_tokens: 400,
       messages: [{
         role: 'user',
@@ -173,7 +173,7 @@ ${jobDescription.substring(0, 1000)}`
 async function tailorResumeWithRequirements(resume, requirements) {
   try {
     const message = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-3-haiku-20240307',
       max_tokens: 1200,
       messages: [{
         role: 'user',
