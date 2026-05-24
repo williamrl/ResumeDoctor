@@ -148,19 +148,28 @@ app.get('/api/user/:userId/tailors', (req, res) => {
   }
 });
 
-async function parseResumeFile(fileBuffer, mimeType) {
+async function parseResumeFile(fileBuffer, mimeType, filename) {
   try {
-    if (mimeType === 'application/pdf') {
+    let text = '';
+    
+    if (mimeType === 'application/pdf' || filename.endsWith('.pdf')) {
       const data = await pdfParse(fileBuffer);
-      return data.text;
-    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || mimeType === 'application/msword') {
+      text = data.text;
+    } else if (
+      mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      mimeType === 'application/msword' ||
+      filename.endsWith('.docx') ||
+      filename.endsWith('.doc')
+    ) {
       const result = await mammoth.extractRawText({ buffer: fileBuffer });
-      return result.value;
-    } else if (mimeType === 'text/plain') {
-      return fileBuffer.toString('utf-8');
+      text = result.value;
+    } else if (mimeType === 'text/plain' || filename.endsWith('.txt')) {
+      text = fileBuffer.toString('utf-8');
     } else {
       return null;
     }
+    
+    return text.trim().length > 0 ? text : null;
   } catch (err) {
     console.error('File parse error:', err);
     return null;
@@ -171,7 +180,7 @@ function stripResume(resume) {
   if (!resume) return '';
   let stripped = resume.replace(/\n{3,}/g, '\n\n').trim();
   let lines = stripped.split('\n').filter(line => line.trim().length > 0);
-  return lines.join('\n').substring(0, 1000);
+  return lines.join('\n').substring(0, 1500);
 }
 
 async function extractJobRequirements(jobDescription) {
@@ -240,14 +249,16 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     // Parse resume file
     let resumeContent = '';
     if (req.file) {
-      resumeContent = await parseResumeFile(req.file.buffer, req.file.mimetype);
+      console.log('Parsing file:', req.file.originalname, 'MIME:', req.file.mimetype);
+      resumeContent = await parseResumeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
+      
       if (!resumeContent) {
-        return res.status(400).json({ error: 'Unable to parse resume file. Please use PDF, DOCX, or TXT format.' });
+        return res.status(400).json({ error: 'Unable to parse resume file. Please try a PDF or ensure your DOCX file is valid.' });
       }
     }
 
-    if (!resumeContent || resumeContent.trim().length < 50) {
-      return res.status(400).json({ error: 'Resume content is too short or could not be extracted.' });
+    if (!resumeContent || resumeContent.trim().length < 100) {
+      return res.status(400).json({ error: 'Resume content is too short or could not be extracted. Minimum 100 characters required.' });
     }
 
     let finalJobDescription = jobDescription;
@@ -285,7 +296,7 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     // Validate job description
     if (!finalJobDescription || finalJobDescription.trim().length < 100) {
       return res.status(400).json({ 
-        error: 'Job description is required. Please paste the job description directly.' 
+        error: 'Job description is required (minimum 100 characters). Please paste the full job description.' 
       });
     }
 
