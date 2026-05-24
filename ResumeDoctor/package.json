@@ -1,9 +1,9 @@
 {
   "name": "resume-tailor-saas",
   "version": "1.0.0",
+  "type": "module",
   "description": "AI-powered resume tailoring SaaS",
   "main": "server.js",
-  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
@@ -20,7 +20,8 @@
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "@anthropic-ai/sdk": "^0.20.0"
+    "@anthropic-ai/sdk": "^0.24.0",
+    "stripe": "^14.0.0"
   },
   "devDependencies": {}
 }
