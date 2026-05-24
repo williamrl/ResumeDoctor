@@ -305,6 +305,12 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
   try {
     const { userId, jobDescription, jobUrl } = req.body;
     
+    console.log('=== TAILOR RESUME REQUEST ===');
+    console.log('userId:', userId);
+    console.log('jobDescription length:', jobDescription ? jobDescription.length : 0);
+    console.log('jobUrl:', jobUrl);
+    console.log('file uploaded:', req.file ? 'yes' : 'no');
+    
     if (!userId) {
       return res.status(400).json({ error: 'Missing user ID' });
     }
@@ -322,16 +328,24 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     // Parse resume file
     let resumeContent = '';
     if (req.file) {
-      console.log('Parsing file:', req.file.originalname);
+      console.log('Parsing file:', req.file.originalname, 'Size:', req.file.size, 'MIME:', req.file.mimetype);
       resumeContent = await parseResumeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
+      console.log('Resume extracted:', resumeContent ? resumeContent.length : 0, 'characters');
       
       if (!resumeContent) {
+        console.log('Failed to extract resume content');
         return res.status(400).json({ error: 'Unable to parse resume file. Please try a PDF or TXT format.' });
       }
+    } else {
+      console.log('No file uploaded in request');
+      return res.status(400).json({ error: 'Please upload a resume file.' });
     }
 
-    if (!resumeContent || resumeContent.trim().length < 50) {
-      return res.status(400).json({ error: 'Resume content is too short or could not be extracted.' });
+    const trimmedResume = resumeContent.trim();
+    console.log('Trimmed resume length:', trimmedResume.length);
+    
+    if (trimmedResume.length < 50) {
+      return res.status(400).json({ error: 'Resume content is too short (minimum 50 characters). Extracted: ' + trimmedResume.length + ' characters.' });
     }
 
     let finalJobDescription = jobDescription;
