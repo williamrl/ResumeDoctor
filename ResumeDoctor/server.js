@@ -38,11 +38,9 @@ app.post('/api/auth/register', (req, res) => {
       return res.status(400).json({ error: 'User already exists' });
     }
     
-    // Developer bypass - use dev email
     const userId = email === 'dev@test.com' ? DEVELOPER_USER_ID : Date.now().toString();
     users.set(email, { userId, name, password });
     
-    // Developer gets unlimited tailors
     const tailorsAvailable = email === 'dev@test.com' ? UNLIMITED_TAILORS : 0;
     userTailors.set(userId, tailorsAvailable);
     
@@ -154,7 +152,7 @@ function stripResume(resume) {
 async function extractJobRequirements(jobDescription) {
   try {
     const message = await client.messages.create({
-      model: 'claude-3-5-haiku-20250108',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 400,
       messages: [{
         role: 'user',
@@ -175,7 +173,7 @@ ${jobDescription.substring(0, 1000)}`
 async function tailorResumeWithRequirements(resume, requirements) {
   try {
     const message = await client.messages.create({
-      model: 'claude-3-5-haiku-20250108',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1200,
       messages: [{
         role: 'user',
@@ -204,7 +202,6 @@ app.post('/api/tailor-resume', async (req, res) => {
       return res.status(400).json({ error: 'Missing user ID' });
     }
 
-    // Developer bypass - unlimited tailors
     let tailorsAvailable;
     if (userId === DEVELOPER_USER_ID) {
       tailorsAvailable = UNLIMITED_TAILORS;
@@ -235,7 +232,6 @@ app.post('/api/tailor-resume', async (req, res) => {
     const requirements = await extractJobRequirements(finalJobDescription);
     const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements);
 
-    // Only deduct tailors if not developer
     if (userId !== DEVELOPER_USER_ID) {
       userTailors.set(userId, tailorsAvailable - 1);
     }
