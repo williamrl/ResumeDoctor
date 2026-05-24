@@ -3,7 +3,6 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
 import Stripe from 'stripe';
-import * as cheerio from 'cheerio';
 
 dotenv.config();
 
@@ -150,35 +149,6 @@ function stripResume(resume) {
   return lines.join('\n').substring(0, 800);
 }
 
-async function extractJobDescriptionFromUrl(jobUrl) {
-  try {
-    const response = await fetch(jobUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    const html = await response.text();
-    
-    // Parse with cheerio
-    const $ = cheerio.load(html);
-    
-    // Remove script and style tags
-    $('script').remove();
-    $('style').remove();
-    
-    // Get text content
-    let text = $.text();
-    
-    // Clean up whitespace
-    text = text.replace(/\s+/g, ' ').trim();
-    
-    return text.substring(0, 3000);
-  } catch (err) {
-    console.error('URL extraction error:', err);
-    return null;
-  }
-}
-
 async function extractJobRequirements(jobDescription) {
   try {
     const message = await client.messages.create({
@@ -244,22 +214,46 @@ app.post('/api/tailor-resume', async (req, res) => {
 
     let finalJobDescription = jobDescription;
     
-    // Extract from URL if provided
+    // If URL provided but no description, try to extract
     if (jobUrl && !jobDescription) {
-      const extractedJob = await extractJobDescriptionFromUrl(jobUrl);
-      if (extractedJob) {
-        finalJobDescription = extractedJob;
+      try {
+        const response = await fetch(jobUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        });
+        const html = await response.text();
+        
+        // Extract text content more aggressively
+        const text = html
+          .replace(/<script[^>]*>.*?<\/script>/gs, '')
+          .replace(/<style[^>]*>.*?<\/style>/gs, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        if (text && text.length > 200) {
+          finalJobDescription = text.substring(0, 3000);
+        }
+      } catch (err) {
+        console.error('URL extraction error:', err);
       }
     }
 
-    // Require job description
+    // Validate job description
     if (!finalJobDescription || finalJobDescription.trim().length < 100) {
-      return res.status(400).json({ error: 'Could not extract job description from URL or no description provided. Please paste the job description directly.' });
+      return res.status(400).json({ 
+        error: 'Job description is required. URL extraction failed - please copy and paste the job description from the posting directly.' 
+      });
     }
 
     // Resume validation
     if (!resumeContent || resumeContent.trim().length < 50) {
-      return res.status(400).json({ error: 'Resume content is too short or empty.' });
+      return res.status(400).json({ error: 'Please provide your resume as plain text.' });
     }
 
     const strippedResume = stripResume(resumeContent);
