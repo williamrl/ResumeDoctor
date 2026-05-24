@@ -10,6 +10,10 @@ const app = express();
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+// Developer bypass for testing
+const DEVELOPER_USER_ID = 'dev-bypass-123';
+const UNLIMITED_TAILORS = 9999;
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '50mb' }));
@@ -34,11 +38,15 @@ app.post('/api/auth/register', (req, res) => {
       return res.status(400).json({ error: 'User already exists' });
     }
     
-    const userId = Date.now().toString();
+    // Developer bypass - use dev email
+    const userId = email === 'dev@test.com' ? DEVELOPER_USER_ID : Date.now().toString();
     users.set(email, { userId, name, password });
-    userTailors.set(userId, 0);
     
-    res.json({ success: true, userId, name, tailorsAvailable: 0 });
+    // Developer gets unlimited tailors
+    const tailorsAvailable = email === 'dev@test.com' ? UNLIMITED_TAILORS : 0;
+    userTailors.set(userId, tailorsAvailable);
+    
+    res.json({ success: true, userId, name, tailorsAvailable });
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -196,9 +204,15 @@ app.post('/api/tailor-resume', async (req, res) => {
       return res.status(400).json({ error: 'Missing user ID' });
     }
 
-    const tailorsAvailable = userTailors.get(userId) || 0;
-    if (tailorsAvailable <= 0) {
-      return res.status(403).json({ error: 'No tailors available. Purchase one first.' });
+    // Developer bypass - unlimited tailors
+    let tailorsAvailable;
+    if (userId === DEVELOPER_USER_ID) {
+      tailorsAvailable = UNLIMITED_TAILORS;
+    } else {
+      tailorsAvailable = userTailors.get(userId) || 0;
+      if (tailorsAvailable <= 0) {
+        return res.status(403).json({ error: 'No tailors available. Purchase one first.' });
+      }
     }
 
     let finalJobDescription = jobDescription;
@@ -221,12 +235,15 @@ app.post('/api/tailor-resume', async (req, res) => {
     const requirements = await extractJobRequirements(finalJobDescription);
     const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements);
 
-    userTailors.set(userId, tailorsAvailable - 1);
+    // Only deduct tailors if not developer
+    if (userId !== DEVELOPER_USER_ID) {
+      userTailors.set(userId, tailorsAvailable - 1);
+    }
 
     res.json({ 
       success: true, 
       tailoredResume,
-      tailorsRemaining: tailorsAvailable - 1
+      tailorsRemaining: userId === DEVELOPER_USER_ID ? UNLIMITED_TAILORS : tailorsAvailable - 1
     });
     
   } catch (error) {
