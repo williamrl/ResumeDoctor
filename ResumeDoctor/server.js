@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
 import Stripe from 'stripe';
+import * as cheerio from 'cheerio';
 
 dotenv.config();
 
@@ -149,6 +150,35 @@ function stripResume(resume) {
   return lines.join('\n').substring(0, 800);
 }
 
+async function extractJobDescriptionFromUrl(jobUrl) {
+  try {
+    const response = await fetch(jobUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    const html = await response.text();
+    
+    // Parse with cheerio
+    const $ = cheerio.load(html);
+    
+    // Remove script and style tags
+    $('script').remove();
+    $('style').remove();
+    
+    // Get text content
+    let text = $.text();
+    
+    // Clean up whitespace
+    text = text.replace(/\s+/g, ' ').trim();
+    
+    return text.substring(0, 3000);
+  } catch (err) {
+    console.error('URL extraction error:', err);
+    return null;
+  }
+}
+
 async function extractJobRequirements(jobDescription) {
   try {
     const message = await client.messages.create({
@@ -156,10 +186,10 @@ async function extractJobRequirements(jobDescription) {
       max_tokens: 400,
       messages: [{
         role: 'user',
-        content: `Extract ONLY the key requirements from this job. List: title, required skills, experience level, key responsibilities.
+        content: `Extract ONLY the key job requirements from this job posting. List: job title, required skills, experience level, key responsibilities.
 
-JOB:
-${jobDescription.substring(0, 1000)}`
+JOB POSTING:
+${jobDescription.substring(0, 1500)}`
       }]
     });
 
@@ -177,12 +207,12 @@ async function tailorResumeWithRequirements(resume, requirements) {
       max_tokens: 1200,
       messages: [{
         role: 'user',
-        content: `Tailor resume to match these job requirements. One page. Return ONLY the tailored resume.
+        content: `You are a professional resume writer. Tailor the resume below to match the job requirements exactly. Emphasize relevant skills and experience. Keep it to one page max. Return ONLY the tailored resume text.
 
-REQUIREMENTS:
+JOB REQUIREMENTS:
 ${requirements}
 
-RESUME:
+ORIGINAL RESUME:
 ${resume}`
       }]
     });
@@ -214,18 +244,22 @@ app.post('/api/tailor-resume', async (req, res) => {
 
     let finalJobDescription = jobDescription;
     
+    // Extract from URL if provided
     if (jobUrl && !jobDescription) {
-      try {
-        const response = await fetch(jobUrl);
-        const html = await response.text();
-        finalJobDescription = html.substring(0, 2000);
-      } catch (err) {
-        return res.status(400).json({ error: 'Could not extract job from URL. Please paste description.' });
+      const extractedJob = await extractJobDescriptionFromUrl(jobUrl);
+      if (extractedJob) {
+        finalJobDescription = extractedJob;
       }
     }
 
-    if (!finalJobDescription) {
-      return res.status(400).json({ error: 'Please provide job description or URL' });
+    // Require job description
+    if (!finalJobDescription || finalJobDescription.trim().length < 100) {
+      return res.status(400).json({ error: 'Could not extract job description from URL or no description provided. Please paste the job description directly.' });
+    }
+
+    // Resume validation
+    if (!resumeContent || resumeContent.trim().length < 50) {
+      return res.status(400).json({ error: 'Resume content is too short or empty.' });
     }
 
     const strippedResume = stripResume(resumeContent);
