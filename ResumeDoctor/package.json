@@ -22,7 +22,8 @@
     "dotenv": "^16.3.1",
     "@anthropic-ai/sdk": "^0.24.0",
     "stripe": "^14.0.0",
-    "cheerio": "^1.0.0-rc.12"
+    "pdfparse": "^1.1.1",
+    "mammoth": "^1.6.0"
   },
   "devDependencies": {}
 }
