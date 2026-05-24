@@ -31,6 +31,28 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.post('/api/debug-parse-file', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const content = await parseResumeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
+    
+    res.json({ 
+      filename: req.file.originalname,
+      mimetype: req.file.mimetype,
+      file_size: req.file.size,
+      extracted_length: content ? content.length : 0,
+      extracted_content: content ? content.substring(0, 500) : null,
+      success: content ? true : false
+    });
+  } catch (error) {
+    console.error('Debug parse error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const users = new Map();
 const userTailors = new Map();
 
@@ -192,23 +214,33 @@ async function parseResumeFile(fileBuffer, mimeType, filename) {
     let text = '';
     
     if (mimeType === 'application/pdf' || filename.endsWith('.pdf')) {
+      console.log('Parsing as PDF...');
       const data = await pdfParse(fileBuffer);
       text = data.text;
+      console.log('PDF extracted:', text.length, 'characters');
     } else if (
       mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
       filename.endsWith('.docx')
     ) {
+      console.log('Parsing as DOCX...');
       text = await parseDOCX(fileBuffer);
+      console.log('DOCX extracted:', text ? text.length : 0, 'characters');
     } else if (mimeType === 'application/msword' || filename.endsWith('.doc')) {
-      // For .doc files, try text extraction as fallback
+      console.log('Parsing as DOC...');
       text = fileBuffer.toString('utf-8', 0, Math.min(fileBuffer.length, 100000));
     } else if (mimeType === 'text/plain' || filename.endsWith('.txt')) {
+      console.log('Parsing as TXT...');
       text = fileBuffer.toString('utf-8');
     } else {
+      console.log('Unknown file type:', mimeType);
       return null;
     }
     
-    if (!text) return null;
+    if (!text) {
+      console.log('No text extracted');
+      return null;
+    }
+    
     const cleanedText = text.trim();
     return cleanedText.length > 0 ? cleanedText : null;
   } catch (err) {
