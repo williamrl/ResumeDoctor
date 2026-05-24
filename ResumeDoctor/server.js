@@ -4,7 +4,9 @@ import dotenv from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
 import Stripe from 'stripe';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import { DocxParser } from 'docx-parser';
+import unzipper from 'unzipper';
+import { parseStringPromise } from 'xml2js';
+import { Readable } from 'stream';
 import multer from 'multer';
 
 dotenv.config();
@@ -148,6 +150,43 @@ app.get('/api/user/:userId/tailors', (req, res) => {
   }
 });
 
+async function parseDOCX(fileBuffer) {
+  try {
+    const readable = Readable.from(Buffer.from(fileBuffer));
+    const directory = await readable.pipe(unzipper.Parse()).promise();
+    
+    let xmlContent = '';
+    for (const entry of directory) {
+      if (entry.path === 'word/document.xml') {
+        xmlContent = await entry.buffer();
+        break;
+      } else {
+        entry.autodrain();
+      }
+    }
+    
+    if (!xmlContent) return null;
+    
+    const parsed = await parseStringPromise(xmlContent);
+    const paragraphs = parsed.document?.body?.[0]?.p || [];
+    
+    let text = '';
+    for (const para of paragraphs) {
+      const runs = para.r || [];
+      for (const run of runs) {
+        const textContent = run.t?.[0] || '';
+        text += textContent;
+      }
+      text += '\n';
+    }
+    
+    return text.trim();
+  } catch (err) {
+    console.error('DOCX parse error:', err);
+    return null;
+  }
+}
+
 async function parseResumeFile(fileBuffer, mimeType, filename) {
   try {
     let text = '';
@@ -157,25 +196,19 @@ async function parseResumeFile(fileBuffer, mimeType, filename) {
       text = data.text;
     } else if (
       mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-      mimeType === 'application/msword' ||
-      filename.endsWith('.docx') ||
-      filename.endsWith('.doc')
+      filename.endsWith('.docx')
     ) {
-      try {
-        const parser = new DocxParser();
-        const result = await parser.parseBuffer(fileBuffer);
-        text = result;
-      } catch (docxErr) {
-        console.error('DOCX parse error, trying text extraction:', docxErr);
-        // Fallback: try to extract as much text as possible
-        text = fileBuffer.toString('utf-8', 0, Math.min(fileBuffer.length, 50000));
-      }
+      text = await parseDOCX(fileBuffer);
+    } else if (mimeType === 'application/msword' || filename.endsWith('.doc')) {
+      // For .doc files, try text extraction as fallback
+      text = fileBuffer.toString('utf-8', 0, Math.min(fileBuffer.length, 100000));
     } else if (mimeType === 'text/plain' || filename.endsWith('.txt')) {
       text = fileBuffer.toString('utf-8');
     } else {
       return null;
     }
     
+    if (!text) return null;
     const cleanedText = text.trim();
     return cleanedText.length > 0 ? cleanedText : null;
   } catch (err) {
@@ -257,17 +290,16 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     // Parse resume file
     let resumeContent = '';
     if (req.file) {
-      console.log('Parsing file:', req.file.originalname, 'Size:', req.file.size, 'MIME:', req.file.mimetype);
+      console.log('Parsing file:', req.file.originalname);
       resumeContent = await parseResumeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
-      console.log('Extracted content length:', resumeContent ? resumeContent.length : 0);
       
       if (!resumeContent) {
-        return res.status(400).json({ error: 'Unable to parse resume file. Please try uploading as PDF instead.' });
+        return res.status(400).json({ error: 'Unable to parse resume file. Please try a PDF or TXT format.' });
       }
     }
 
     if (!resumeContent || resumeContent.trim().length < 50) {
-      return res.status(400).json({ error: 'Resume content is too short or could not be extracted properly. Please try a PDF file.' });
+      return res.status(400).json({ error: 'Resume content is too short or could not be extracted.' });
     }
 
     let finalJobDescription = jobDescription;
