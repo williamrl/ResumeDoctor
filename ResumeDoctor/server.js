@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
 import Stripe from 'stripe';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import mammoth from 'mammoth';
+import { DocxParser } from 'docx-parser';
 import multer from 'multer';
 
 dotenv.config();
@@ -161,15 +161,23 @@ async function parseResumeFile(fileBuffer, mimeType, filename) {
       filename.endsWith('.docx') ||
       filename.endsWith('.doc')
     ) {
-      const result = await mammoth.extractRawText({ buffer: fileBuffer });
-      text = result.value;
+      try {
+        const parser = new DocxParser();
+        const result = await parser.parseBuffer(fileBuffer);
+        text = result;
+      } catch (docxErr) {
+        console.error('DOCX parse error, trying text extraction:', docxErr);
+        // Fallback: try to extract as much text as possible
+        text = fileBuffer.toString('utf-8', 0, Math.min(fileBuffer.length, 50000));
+      }
     } else if (mimeType === 'text/plain' || filename.endsWith('.txt')) {
       text = fileBuffer.toString('utf-8');
     } else {
       return null;
     }
     
-    return text.trim().length > 0 ? text : null;
+    const cleanedText = text.trim();
+    return cleanedText.length > 0 ? cleanedText : null;
   } catch (err) {
     console.error('File parse error:', err);
     return null;
@@ -180,7 +188,7 @@ function stripResume(resume) {
   if (!resume) return '';
   let stripped = resume.replace(/\n{3,}/g, '\n\n').trim();
   let lines = stripped.split('\n').filter(line => line.trim().length > 0);
-  return lines.join('\n').substring(0, 1500);
+  return lines.join('\n').substring(0, 2000);
 }
 
 async function extractJobRequirements(jobDescription) {
@@ -249,16 +257,17 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     // Parse resume file
     let resumeContent = '';
     if (req.file) {
-      console.log('Parsing file:', req.file.originalname, 'MIME:', req.file.mimetype);
+      console.log('Parsing file:', req.file.originalname, 'Size:', req.file.size, 'MIME:', req.file.mimetype);
       resumeContent = await parseResumeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
+      console.log('Extracted content length:', resumeContent ? resumeContent.length : 0);
       
       if (!resumeContent) {
-        return res.status(400).json({ error: 'Unable to parse resume file. Please try a PDF or ensure your DOCX file is valid.' });
+        return res.status(400).json({ error: 'Unable to parse resume file. Please try uploading as PDF instead.' });
       }
     }
 
-    if (!resumeContent || resumeContent.trim().length < 100) {
-      return res.status(400).json({ error: 'Resume content is too short or could not be extracted. Minimum 100 characters required.' });
+    if (!resumeContent || resumeContent.trim().length < 50) {
+      return res.status(400).json({ error: 'Resume content is too short or could not be extracted properly. Please try a PDF file.' });
     }
 
     let finalJobDescription = jobDescription;
@@ -294,9 +303,9 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     }
 
     // Validate job description
-    if (!finalJobDescription || finalJobDescription.trim().length < 100) {
+    if (!finalJobDescription || finalJobDescription.trim().length < 50) {
       return res.status(400).json({ 
-        error: 'Job description is required (minimum 100 characters). Please paste the full job description.' 
+        error: 'Job description is required. Please paste the full job description.' 
       });
     }
 
