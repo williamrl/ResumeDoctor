@@ -259,7 +259,7 @@ function stripResume(resume) {
 
 async function extractJobRequirements(jobDescription) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
     
     const result = await model.generateContent(
       `Extract ONLY the key job requirements from this job posting. List: job title, required skills, experience level, key responsibilities.
@@ -278,7 +278,7 @@ ${jobDescription.substring(0, 1500)}`
 
 async function tailorResumeWithRequirements(resume, requirements) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
     
     const result = await model.generateContent(
       `You are a professional resume writer. Tailor the resume below to match the job requirements exactly. Emphasize relevant skills and experience. Keep it to one page max. Return ONLY the tailored resume text.
