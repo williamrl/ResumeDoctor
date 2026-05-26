@@ -257,35 +257,44 @@ function stripResume(resume) {
   return lines.join('\n');
 }
 
-function sanitizeResumeText(text) {
+// AGGRESSIVE SANITIZATION - strips ALL weird characters
+function deepSanitize(text) {
   if (!text) return '';
   
-  // Remove rogue percentage signs at start of lines
-  text = text.replace(/^\s*%\s*/gm, '');
+  // Step 1: Remove all known bad prefixes and unicode pairs
+  text = text.replace(/^[\s%Ï•·○◦◆◎☐✓★]*\s*/gm, '');
   
-  // Fix escaped dollar signs (\$50K -> $50K)
-  text = text.replace(/\\\$/g, '$');
+  // Step 2: Remove specific bad character sequences
+  text = text.replace(/%Ï/g, '');
+  text = text.replace(/Ã¯/g, '');
+  text = text.replace(/â\x80/g, '');
+  text = text.replace(/â/g, '');
+  text = text.replace(/€™/g, '');
+  text = text.replace(/€/g, '');
+  text = text.replace(/™/g, '');
+  text = text.replace(/Â/g, '');
   
-  // Remove markdown bullet artifacts
-  text = text.replace(/^\s*[\*\-•]\s*/gm, '');
-  
-  // Remove control characters
+  // Step 3: Remove control characters and non-ASCII (except common ones)
   text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
   
-  // Fix encoding issues
-  text = text.replace(/Ã¯/g, '').replace(/â/g, '').replace(/€™/g, '');
+  // Step 4: Replace various bullet-like characters with standard bullet
+  text = text.replace(/[•·○◦◆◎☐✓★%]/g, '');
   
-  // Clean multiple spaces
-  text = text.replace(/  +/g, ' ');
+  // Step 5: Fix escaped characters
+  text = text.replace(/\\\$/g, '$');
+  text = text.replace(/\\\*/g, '*');
+  text = text.replace(/\\\-/g, '-');
   
-  // Normalize line endings
-  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // Step 6: Clean up spacing
+  text = text.replace(/\s+/g, ' ');
+  text = text.replace(/\n\s+/g, '\n');
   
-  // Remove multiple blank lines
+  // Step 7: Normalize line endings
+  text = text.replace(/\r\n/g, '\n');
+  text = text.replace(/\r/g, '\n');
+  
+  // Step 8: Remove multiple blank lines
   text = text.replace(/\n\n\n+/g, '\n\n');
-  
-  // Ensure bullets are consistent
-  text = text.replace(/\n●\s*/g, '\n● ');
   
   return text.trim();
 }
@@ -300,7 +309,7 @@ function detectTechRole(jobDescription) {
 const fewShotExamples = `
 EXAMPLE 1 - GOOD TAILORING (Tech Role):
 Original: "Managed team of 5 developers and handled project timelines"
-Tailored for "Senior Backend Engineer": "Led team of 5 backend engineers through microservices migration to AWS, ensuring zero downtime and 30% reduction in deployment time"
+Tailored for "Senior Backend Engineer": "Led team of 5 backend engineers through microservices migration to AWS, ensuring zero downtime and 30 percent reduction in deployment time"
 Why it works: Keeps the truth (team of 5, leadership), adds technical depth matching the role.
 
 EXAMPLE 2 - GOOD TAILORING (Soft Skills Weaving):
@@ -346,35 +355,57 @@ Provide:
   }
 }
 
-// Define Resume Section Schema
-const resumeSectionSchema = {
-  type: 'object',
-  properties: {
-    title: {
-      type: 'string',
-      description: 'Section title (e.g., EXPERIENCE, SKILLS, EDUCATION)'
-    },
-    content: {
-      type: 'array',
-      items: {
-        type: 'string'
-      },
-      description: 'Array of lines/bullets without any markdown characters or special formatting'
-    }
-  },
-  required: ['title', 'content']
-};
-
 const tailoredResumeSchema = {
   type: 'object',
   properties: {
-    sections: {
+    professional_summary: {
+      type: 'string',
+      description: 'Professional summary paragraph with no special characters'
+    },
+    experience: {
       type: 'array',
-      items: resumeSectionSchema,
-      description: 'Array of resume sections with clean content'
+      items: {
+        type: 'object',
+        properties: {
+          job_title: { type: 'string' },
+          company: { type: 'string' },
+          location: { type: 'string' },
+          date_range: { type: 'string' },
+          bullet_points: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Clean text strings with no markdown or special characters'
+          }
+        }
+      }
+    },
+    skills: {
+      type: 'object',
+      properties: {
+        category: { type: 'string' },
+        items: {
+          type: 'array',
+          items: { type: 'string' }
+        }
+      }
+    },
+    education: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          degree: { type: 'string' },
+          school: { type: 'string' },
+          graduation_date: { type: 'string' },
+          details: { type: 'string' }
+        }
+      }
+    },
+    certifications: {
+      type: 'array',
+      items: { type: 'string' }
     }
-  },
-  required: ['sections']
+  }
 };
 
 async function tailorResumeWithRequirements(resume, requirements, jobDescription) {
@@ -390,13 +421,16 @@ CRITICAL CONSTRAINTS:
 2. NEVER use explicit soft-skill headers in bullet points.
 3. DO weave the target job's requested attributes implicitly into action verbs.
 4. PRESERVE TECHNICAL DEPTH for tech roles.
-5. AVOID clichés and vague soft skills.
 
-FORMATTING CONSTRAINTS:
-1. Do NOT include Markdown bullet characters (*, -, or •) at the beginning of strings. The array items should be pure text strings.
-2. Do NOT escape special characters. Write "$50,000" or "$50K", not "\\$50K".
-3. Do NOT use percent symbols as bullet replacement tokens. Use numbers like "35%" or "35 percent".
-4. Output pure, unformatted text with NO special characters beyond standard ASCII.
+ABSOLUTE FORMATTING RULES:
+- Output ONLY clean ASCII text
+- NO special characters, unicode, symbols, or encoding artifacts
+- NO markdown bullets, asterisks, or dashes
+- NO escaped characters
+- NO percent signs
+- NO curly braces
+- Each bullet point is a plain English sentence
+- Use the JSON structure provided - fill each field with plain strings only
 
 ${fewShotExamples}
 `
@@ -410,7 +444,7 @@ ${fewShotExamples}
       contents: [{
         role: 'user',
         parts: [{
-          text: `You are tailoring a resume for a specific job. Here are the requirements:
+          text: `Tailor this resume for the following job:
 
 ${requirements}
 
@@ -419,14 +453,7 @@ ${resume}
 
 ${tailoringInstructions}
 
-OUTPUT INSTRUCTIONS:
-1. Structure the resume as JSON with sections
-2. Each section has a title and an array of content lines
-3. For bullet points, output as plain strings WITHOUT bullet characters
-4. Keep the resume to one page (max 500 words)
-5. Weave job requirements into existing achievements - don't invent new experiences
-6. Each bullet should be 1-2 sentences with clear impact
-7. Use NO special characters, NO escaping, NO markdown formatting`
+Return ONLY a valid JSON object following the provided schema. Each text field must contain ONLY clean English text with NO special characters, NO markdown, and NO symbols.`
         }]
       }],
       generationConfig: {
@@ -436,34 +463,97 @@ OUTPUT INSTRUCTIONS:
     });
 
     const response = await result.response;
-    const jsonText = response.text();
+    let jsonText = response.text();
     
     let resumeData;
     try {
       resumeData = JSON.parse(jsonText);
     } catch (e) {
       console.error('Failed to parse JSON response:', e);
+      console.error('Raw response:', jsonText);
       return jsonText;
     }
 
-    // Convert structured output back to formatted resume text
+    // Convert structured output back to formatted resume text with deep sanitization
     let formattedResume = '';
-    for (const section of resumeData.sections) {
-      formattedResume += section.title + '\n';
-      for (const line of section.content) {
-        if (line.trim()) {
-          // Add bullet only if it's not already there
-          if (!line.trim().startsWith('●')) {
-            formattedResume += '● ' + line + '\n';
-          } else {
-            formattedResume += line + '\n';
+
+    // Professional Summary
+    if (resumeData.professional_summary) {
+      formattedResume += 'PROFESSIONAL SUMMARY\n';
+      const cleanedSummary = deepSanitize(resumeData.professional_summary);
+      formattedResume += cleanedSummary + '\n\n';
+    }
+
+    // Experience
+    if (resumeData.experience && Array.isArray(resumeData.experience)) {
+      formattedResume += 'EXPERIENCE\n';
+      for (const job of resumeData.experience) {
+        const title = deepSanitize(job.job_title || '');
+        const company = deepSanitize(job.company || '');
+        const location = deepSanitize(job.location || '');
+        const dateRange = deepSanitize(job.date_range || '');
+        
+        formattedResume += `${title} | ${company}\n`;
+        formattedResume += `${location} | ${dateRange}\n`;
+        
+        if (job.bullet_points && Array.isArray(job.bullet_points)) {
+          for (const bullet of job.bullet_points) {
+            const cleanedBullet = deepSanitize(bullet);
+            if (cleanedBullet) {
+              formattedResume += `● ${cleanedBullet}\n`;
+            }
+          }
+        }
+        formattedResume += '\n';
+      }
+    }
+
+    // Skills
+    if (resumeData.skills && Array.isArray(resumeData.skills)) {
+      formattedResume += 'SKILLS\n';
+      for (const skillCategory of resumeData.skills) {
+        if (skillCategory.category) {
+          const category = deepSanitize(skillCategory.category);
+          formattedResume += `${category}: `;
+          if (skillCategory.items) {
+            const items = skillCategory.items.map(item => deepSanitize(item)).join(', ');
+            formattedResume += items + '\n';
           }
         }
       }
       formattedResume += '\n';
     }
 
-    return sanitizeResumeText(formattedResume);
+    // Education
+    if (resumeData.education && Array.isArray(resumeData.education)) {
+      formattedResume += 'EDUCATION\n';
+      for (const edu of resumeData.education) {
+        const degree = deepSanitize(edu.degree || '');
+        const school = deepSanitize(edu.school || '');
+        const date = deepSanitize(edu.graduation_date || '');
+        const details = deepSanitize(edu.details || '');
+        
+        formattedResume += `${degree}\n`;
+        formattedResume += `${school} | ${date}\n`;
+        if (details) {
+          formattedResume += `${details}\n`;
+        }
+        formattedResume += '\n';
+      }
+    }
+
+    // Certifications
+    if (resumeData.certifications && Array.isArray(resumeData.certifications)) {
+      formattedResume += 'CERTIFICATIONS\n';
+      for (const cert of resumeData.certifications) {
+        const cleanedCert = deepSanitize(cert);
+        if (cleanedCert) {
+          formattedResume += `● ${cleanedCert}\n`;
+        }
+      }
+    }
+
+    return deepSanitize(formattedResume);
   } catch (err) {
     console.error('Tailor resume error:', err);
     throw err;
@@ -473,7 +563,7 @@ OUTPUT INSTRUCTIONS:
 async function generateResumePDF(resumeText) {
   return new Promise((resolve, reject) => {
     try {
-      const cleanedText = sanitizeResumeText(resumeText);
+      const cleanedText = deepSanitize(resumeText);
       
       const doc = new PDFDocument({
         size: 'letter',
