@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import Stripe from 'stripe';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import unzipper from 'unzipper';
@@ -257,32 +257,37 @@ function stripResume(resume) {
   return lines.join('\n');
 }
 
-function cleanResumeText(text) {
+function sanitizeResumeText(text) {
   if (!text) return '';
   
-  // Remove weird unicode characters and replace with standard ASCII
-  let cleaned = text
-    // Replace smart bullets and special characters with standard bullet
-    .replace(/[%Ï•·○◦◆◎☐✓★]/g, '●')
-    // Remove control characters and other odd unicode
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
-    // Fix common encoding issues
-    .replace(/Ã¯/g, '')
-    .replace(/â/g, '')
-    .replace(/€™/g, '')
-    .replace(/â\x80/g, '')
-    // Clean up multiple spaces
-    .replace(/  +/g, ' ')
-    // Normalize line endings
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    // Remove multiple consecutive blank lines
-    .replace(/\n\n\n+/g, '\n\n')
-    // Ensure consistent spacing around bullets
-    .replace(/\n●\s*/g, '\n● ')
-    .trim();
+  // Remove rogue percentage signs at start of lines
+  text = text.replace(/^\s*%\s*/gm, '');
   
-  return cleaned;
+  // Fix escaped dollar signs (\$50K -> $50K)
+  text = text.replace(/\\\$/g, '$');
+  
+  // Remove markdown bullet artifacts
+  text = text.replace(/^\s*[\*\-•]\s*/gm, '');
+  
+  // Remove control characters
+  text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
+  
+  // Fix encoding issues
+  text = text.replace(/Ã¯/g, '').replace(/â/g, '').replace(/€™/g, '');
+  
+  // Clean multiple spaces
+  text = text.replace(/  +/g, ' ');
+  
+  // Normalize line endings
+  text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  
+  // Remove multiple blank lines
+  text = text.replace(/\n\n\n+/g, '\n\n');
+  
+  // Ensure bullets are consistent
+  text = text.replace(/\n●\s*/g, '\n● ');
+  
+  return text.trim();
 }
 
 function detectTechRole(jobDescription) {
@@ -302,10 +307,6 @@ EXAMPLE 2 - GOOD TAILORING (Soft Skills Weaving):
 Original: "Responsible for communication between teams"
 Tailored for "Product Manager": "Facilitated alignment between engineering and product teams, translating technical constraints into user-centric requirements"
 Why it works: Implicitly shows communication and collaboration through the action, not by saying "Great Communicator".
-
-EXAMPLE 3 - BAD TAILORING (ATS Breakdown):
-DON'T DO: "● Communication Skills & Problem-Solving: Led the team to fix bugs"
-DO INSTEAD: "● Diagnosed and resolved critical production bugs by coordinating cross-functional troubleshooting efforts"
 `;
 
 async function extractJobRequirements(jobDescription) {
@@ -345,6 +346,37 @@ Provide:
   }
 }
 
+// Define Resume Section Schema
+const resumeSectionSchema = {
+  type: 'object',
+  properties: {
+    title: {
+      type: 'string',
+      description: 'Section title (e.g., EXPERIENCE, SKILLS, EDUCATION)'
+    },
+    content: {
+      type: 'array',
+      items: {
+        type: 'string'
+      },
+      description: 'Array of lines/bullets without any markdown characters or special formatting'
+    }
+  },
+  required: ['title', 'content']
+};
+
+const tailoredResumeSchema = {
+  type: 'object',
+  properties: {
+    sections: {
+      type: 'array',
+      items: resumeSectionSchema,
+      description: 'Array of resume sections with clean content'
+    }
+  },
+  required: ['sections']
+};
+
 async function tailorResumeWithRequirements(resume, requirements, jobDescription) {
   try {
     const isTechRole = detectTechRole(jobDescription);
@@ -353,19 +385,18 @@ async function tailorResumeWithRequirements(resume, requirements, jobDescription
       model: 'gemini-3.5-flash',
       systemInstruction: `You are an expert ATS (Applicant Tracking System) optimization specialist and professional resume writer.
 
-CRITICAL FORMATTING & CONTENT CONSTRAINTS:
-1. Use ONLY standard ASCII characters. Use "●" (bullet) for all list items, never %, ○, ◆, or any special unicode.
-2. Use ONLY standard English letters, numbers, and these punctuation marks: . , - : ( ) & / 
-3. NO special characters, symbols, or unicode beyond standard ASCII.
-4. NEVER alter historical facts, metrics, job titles, or dates. If a title is "Senior Software Engineer", it must remain exactly that.
-5. NEVER use explicit soft-skill headers in bullet points (e.g., do NOT write "Communication Skills: Led a team").
-6. DO weave the target job's requested attributes implicitly into action verbs and framing of REAL achievements.
-7. DO maintain ATS compatibility - use clean formatting, standard action verbs, and measurable results.
-8. PRESERVE TECHNICAL DEPTH: If the candidate has technical skills, keep them prominent unless explicitly pivoting careers.
-9. AVOID clichés: No "go-getter attitude", "passionate about", "thinking outside the box", or vague soft skills.
-10. FOCUS on impact: Every bullet should have a measurable result or clear business value.
-11. Keep line breaks clean and consistent - one blank line between sections.
-12. Format bullets as: "● Verb phrase with measurable outcome"
+CRITICAL CONSTRAINTS:
+1. NEVER alter historical facts, metrics, job titles, or dates.
+2. NEVER use explicit soft-skill headers in bullet points.
+3. DO weave the target job's requested attributes implicitly into action verbs.
+4. PRESERVE TECHNICAL DEPTH for tech roles.
+5. AVOID clichés and vague soft skills.
+
+FORMATTING CONSTRAINTS:
+1. Do NOT include Markdown bullet characters (*, -, or •) at the beginning of strings. The array items should be pure text strings.
+2. Do NOT escape special characters. Write "$50,000" or "$50K", not "\\$50K".
+3. Do NOT use percent symbols as bullet replacement tokens. Use numbers like "35%" or "35 percent".
+4. Output pure, unformatted text with NO special characters beyond standard ASCII.
 
 ${fewShotExamples}
 `
@@ -373,10 +404,13 @@ ${fewShotExamples}
 
     const tailoringInstructions = isTechRole
       ? `Tailor for this TECHNICAL role. Preserve all technical skills and depth. Emphasize relevant technologies and architectural decisions.`
-      : `Tailor for this NON-TECHNICAL role. Translate technical achievements into business/functional terms. For example, "Led Python microservices migration" becomes "Spearheaded infrastructure modernization project reducing deployment time by 40%".`;
+      : `Tailor for this NON-TECHNICAL role. Translate technical achievements into business/functional terms.`;
 
-    const result = await model.generateContent(
-      `You are tailoring a resume for a specific job. Here are the requirements:
+    const result = await model.generateContent({
+      contents: [{
+        role: 'user',
+        parts: [{
+          text: `You are tailoring a resume for a specific job. Here are the requirements:
 
 ${requirements}
 
@@ -386,19 +420,50 @@ ${resume}
 ${tailoringInstructions}
 
 OUTPUT INSTRUCTIONS:
-1. Return ONLY the tailored resume text - no preamble or explanation
-2. Keep the same structure as the original (sections, format)
-3. Weave job requirements into existing achievements - don't invent new experiences
-4. Ensure ATS compatibility with standard formatting
-5. Keep the resume to one page (max 500 words)
-6. Each bullet point should be 1-2 sentences with clear impact
-7. Use ONLY standard ASCII bullets (●) and characters
-8. NO special unicode characters like %, Ï, €, ™, or any symbols outside ASCII`
-    );
+1. Structure the resume as JSON with sections
+2. Each section has a title and an array of content lines
+3. For bullet points, output as plain strings WITHOUT bullet characters
+4. Keep the resume to one page (max 500 words)
+5. Weave job requirements into existing achievements - don't invent new experiences
+6. Each bullet should be 1-2 sentences with clear impact
+7. Use NO special characters, NO escaping, NO markdown formatting`
+        }]
+      }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: tailoredResumeSchema
+      }
+    });
 
     const response = await result.response;
-    const cleanedResume = cleanResumeText(response.text());
-    return cleanedResume;
+    const jsonText = response.text();
+    
+    let resumeData;
+    try {
+      resumeData = JSON.parse(jsonText);
+    } catch (e) {
+      console.error('Failed to parse JSON response:', e);
+      return jsonText;
+    }
+
+    // Convert structured output back to formatted resume text
+    let formattedResume = '';
+    for (const section of resumeData.sections) {
+      formattedResume += section.title + '\n';
+      for (const line of section.content) {
+        if (line.trim()) {
+          // Add bullet only if it's not already there
+          if (!line.trim().startsWith('●')) {
+            formattedResume += '● ' + line + '\n';
+          } else {
+            formattedResume += line + '\n';
+          }
+        }
+      }
+      formattedResume += '\n';
+    }
+
+    return sanitizeResumeText(formattedResume);
   } catch (err) {
     console.error('Tailor resume error:', err);
     throw err;
@@ -408,8 +473,7 @@ OUTPUT INSTRUCTIONS:
 async function generateResumePDF(resumeText) {
   return new Promise((resolve, reject) => {
     try {
-      // Clean the text one more time before PDF generation
-      const cleanedText = cleanResumeText(resumeText);
+      const cleanedText = sanitizeResumeText(resumeText);
       
       const doc = new PDFDocument({
         size: 'letter',
@@ -571,7 +635,6 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
       console.log('PDF generated successfully');
     } catch (pdfErr) {
       console.error('PDF generation error:', pdfErr);
-      // Continue without PDF if it fails
     }
 
     if (userId !== DEVELOPER_USER_ID) {
