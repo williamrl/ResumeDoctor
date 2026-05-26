@@ -8,6 +8,7 @@ import unzipper from 'unzipper';
 import { parseStringPromise } from 'xml2js';
 import { Readable } from 'stream';
 import multer from 'multer';
+import PDFDocument from 'pdfkit';
 
 dotenv.config();
 
@@ -301,6 +302,72 @@ ${resume}`
   }
 }
 
+async function generateResumePDF(resumeText) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        size: 'letter',
+        margin: 40,
+        bufferPages: true
+      });
+
+      let pdfBuffer = Buffer.alloc(0);
+      
+      doc.on('data', (chunk) => {
+        pdfBuffer = Buffer.concat([pdfBuffer, chunk]);
+      });
+
+      doc.on('end', () => {
+        resolve(pdfBuffer.toString('base64'));
+      });
+
+      doc.on('error', reject);
+
+      const lines = resumeText.split('\n');
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        
+        if (!trimmed) {
+          doc.moveDown(0.15);
+          continue;
+        }
+
+        // Section headers (all caps)
+        if (/^[A-Z\s]+$/.test(trimmed) && trimmed.length > 3 && !trimmed.includes('|')) {
+          doc.moveDown(0.2);
+          doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000');
+          doc.text(trimmed);
+          doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke('#333333');
+          doc.moveDown(0.3);
+        }
+        // Bullet points
+        else if (trimmed.startsWith('●')) {
+          doc.fontSize(10).font('Helvetica').fillColor('#000000');
+          doc.text(trimmed, { width: 475 });
+          doc.moveDown(0.15);
+        }
+        // Job titles and dates (lines with years)
+        else if (trimmed.match(/.*\d{4}.*/) && !trimmed.startsWith('●')) {
+          doc.fontSize(11).font('Helvetica-Bold').fillColor('#000000');
+          doc.text(trimmed, { width: 475 });
+          doc.moveDown(0.2);
+        }
+        // Regular text
+        else {
+          doc.fontSize(10).font('Helvetica').fillColor('#000000');
+          doc.text(trimmed, { width: 475 });
+          doc.moveDown(0.2);
+        }
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
   try {
     const { userId, jobDescription, jobUrl } = req.body;
@@ -391,6 +458,16 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     const requirements = await extractJobRequirements(finalJobDescription);
     const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements);
 
+    // Generate PDF
+    let pdfBase64 = null;
+    try {
+      pdfBase64 = await generateResumePDF(tailoredResume);
+      console.log('PDF generated successfully');
+    } catch (pdfErr) {
+      console.error('PDF generation error:', pdfErr);
+      // Continue without PDF if it fails
+    }
+
     if (userId !== DEVELOPER_USER_ID) {
       userTailors.set(userId, tailorsAvailable - 1);
     }
@@ -398,6 +475,7 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     res.json({ 
       success: true, 
       tailoredResume,
+      pdfBase64,
       tailorsRemaining: userId === DEVELOPER_USER_ID ? UNLIMITED_TAILORS : tailorsAvailable - 1
     });
     
