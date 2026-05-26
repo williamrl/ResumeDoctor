@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import Stripe from 'stripe';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import unzipper from 'unzipper';
@@ -254,18 +254,60 @@ function stripResume(resume) {
   if (!resume) return '';
   let stripped = resume.replace(/\n{3,}/g, '\n\n').trim();
   let lines = stripped.split('\n').filter(line => line.trim().length > 0);
-  return lines.join('\n').substring(0, 2000);
+  return lines.join('\n');
 }
+
+function detectTechRole(jobDescription) {
+  const techKeywords = ['software', 'engineer', 'developer', 'python', 'javascript', 'java', 'golang', 'rust', 'aws', 'kubernetes', 'docker', 'database', 'backend', 'frontend', 'fullstack', 'devops', 'cloud', 'api', 'microservices', 'react', 'node', 'sql'];
+  const lowerDesc = jobDescription.toLowerCase();
+  const matches = techKeywords.filter(keyword => lowerDesc.includes(keyword)).length;
+  return matches >= 3;
+}
+
+// Few-shot examples for context
+const fewShotExamples = `
+EXAMPLE 1 - GOOD TAILORING (Tech Role):
+Original: "Managed team of 5 developers and handled project timelines"
+Tailored for "Senior Backend Engineer": "Led team of 5 backend engineers through microservices migration to AWS, ensuring zero downtime and 30% reduction in deployment time"
+Why it works: Keeps the truth (team of 5, leadership), adds technical depth matching the role.
+
+EXAMPLE 2 - GOOD TAILORING (Soft Skills Weaving):
+Original: "Responsible for communication between teams"
+Tailored for "Product Manager": "Facilitated alignment between engineering and product teams, translating technical constraints into user-centric requirements"
+Why it works: Implicitly shows communication and collaboration through the action, not by saying "Great Communicator".
+
+EXAMPLE 3 - BAD TAILORING (ATS Breakdown):
+DON'T DO: "● Communication Skills & Problem-Solving: Led the team to fix bugs"
+DO INSTEAD: "● Diagnosed and resolved critical production bugs by coordinating cross-functional troubleshooting efforts"
+`;
 
 async function extractJobRequirements(jobDescription) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-3.5-flash',
+      systemInstruction: `You are an expert recruiter and ATS specialist. Extract and analyze job requirements with precision.
+Focus on:
+1. Core technical/functional skills (non-negotiable)
+2. Nice-to-have qualifications
+3. Key responsibilities that reveal the role's true priorities
+4. Implicit requirements (e.g., "scale to millions of users" = performance optimization, infrastructure knowledge)
+
+Return a clear, structured analysis that a resume writer can use.`
+    });
     
     const result = await model.generateContent(
-      `Extract ONLY the key job requirements from this job posting. List: job title, required skills, experience level, key responsibilities.
+      `Analyze this job posting and extract the key requirements:
 
 JOB POSTING:
-${jobDescription.substring(0, 1500)}`
+${jobDescription.substring(0, 2000)}
+
+Provide:
+1. Job Title: 
+2. Core Technical Skills Required:
+3. Experience Level Required:
+4. Top 5 Key Responsibilities:
+5. Hidden/Implicit Requirements:
+6. Nice-to-Have Skills:`
     );
 
     const response = await result.response;
@@ -276,18 +318,49 @@ ${jobDescription.substring(0, 1500)}`
   }
 }
 
-async function tailorResumeWithRequirements(resume, requirements) {
+async function tailorResumeWithRequirements(resume, requirements, jobDescription) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
+    const isTechRole = detectTechRole(jobDescription);
     
-    const result = await model.generateContent(
-      `You are a professional resume writer. Tailor the resume below to match the job requirements exactly. Emphasize relevant skills and experience. Keep it to one page max. Return ONLY the tailored resume text.
+    const model = genAI.getGenerativeModel({ 
+      model: 'gemini-3.5-flash',
+      systemInstruction: `You are an expert ATS (Applicant Tracking System) optimization specialist and professional resume writer.
 
-JOB REQUIREMENTS:
+CRITICAL CONSTRAINTS FOR RESUME TAILORING:
+1. NEVER alter historical facts, metrics, job titles, or dates. If a title is "Senior Software Engineer", it must remain exactly that.
+2. NEVER use explicit soft-skill headers in bullet points (e.g., do NOT write "Communication Skills: Led a team").
+3. DO weave the target job's requested attributes implicitly into action verbs and framing of REAL achievements.
+4. DO maintain ATS compatibility - use clean formatting, standard action verbs, and measurable results.
+5. DO preserve the candidate's authentic background and accomplishments.
+6. PRESERVE TECHNICAL DEPTH: If the candidate has technical skills, keep them prominent unless explicitly pivoting careers (and even then, suggest functional translations like "Technical Lead" instead of removing context entirely).
+7. AVOID clichés: No "go-getter attitude", "passionate about", "thinking outside the box", or vague soft skills.
+8. FOCUS on impact: Every bullet should have a measurable result or clear business value.
+
+${fewShotExamples}
+`
+    });
+
+    const tailoringInstructions = isTechRole
+      ? `Tailor for this TECHNICAL role. Preserve all technical skills and depth. Emphasize relevant technologies and architectural decisions.`
+      : `Tailor for this NON-TECHNICAL role. Translate technical achievements into business/functional terms. For example, "Led Python microservices migration" becomes "Spearheaded infrastructure modernization project reducing deployment time by 40%".`;
+
+    const result = await model.generateContent(
+      `You are tailoring a resume for a specific job. Here are the requirements:
+
 ${requirements}
 
 ORIGINAL RESUME:
-${resume}`
+${resume}
+
+${tailoringInstructions}
+
+OUTPUT INSTRUCTIONS:
+1. Return ONLY the tailored resume text
+2. Keep the same structure as the original (sections, format)
+3. Weave job requirements into existing achievements - don't invent new experiences
+4. Ensure ATS compatibility with standard formatting
+5. Keep the resume to one page (max 500 words)
+6. Each bullet point should be 1-2 sentences with clear impact`
     );
 
     const response = await result.response;
@@ -452,7 +525,7 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
 
     const strippedResume = stripResume(resumeContent);
     const requirements = await extractJobRequirements(finalJobDescription);
-    const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements);
+    const tailoredResume = await tailorResumeWithRequirements(strippedResume, requirements, finalJobDescription);
 
     // Generate PDF
     let pdfBase64 = null;
