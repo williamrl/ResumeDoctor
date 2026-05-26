@@ -257,6 +257,34 @@ function stripResume(resume) {
   return lines.join('\n');
 }
 
+function cleanResumeText(text) {
+  if (!text) return '';
+  
+  // Remove weird unicode characters and replace with standard ASCII
+  let cleaned = text
+    // Replace smart bullets and special characters with standard bullet
+    .replace(/[%Ï•·○◦◆◎☐✓★]/g, '●')
+    // Remove control characters and other odd unicode
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+    // Fix common encoding issues
+    .replace(/Ã¯/g, '')
+    .replace(/â/g, '')
+    .replace(/€™/g, '')
+    .replace(/â\x80/g, '')
+    // Clean up multiple spaces
+    .replace(/  +/g, ' ')
+    // Normalize line endings
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    // Remove multiple consecutive blank lines
+    .replace(/\n\n\n+/g, '\n\n')
+    // Ensure consistent spacing around bullets
+    .replace(/\n●\s*/g, '\n● ')
+    .trim();
+  
+  return cleaned;
+}
+
 function detectTechRole(jobDescription) {
   const techKeywords = ['software', 'engineer', 'developer', 'python', 'javascript', 'java', 'golang', 'rust', 'aws', 'kubernetes', 'docker', 'database', 'backend', 'frontend', 'fullstack', 'devops', 'cloud', 'api', 'microservices', 'react', 'node', 'sql'];
   const lowerDesc = jobDescription.toLowerCase();
@@ -264,7 +292,6 @@ function detectTechRole(jobDescription) {
   return matches >= 3;
 }
 
-// Few-shot examples for context
 const fewShotExamples = `
 EXAMPLE 1 - GOOD TAILORING (Tech Role):
 Original: "Managed team of 5 developers and handled project timelines"
@@ -326,15 +353,19 @@ async function tailorResumeWithRequirements(resume, requirements, jobDescription
       model: 'gemini-3.5-flash',
       systemInstruction: `You are an expert ATS (Applicant Tracking System) optimization specialist and professional resume writer.
 
-CRITICAL CONSTRAINTS FOR RESUME TAILORING:
-1. NEVER alter historical facts, metrics, job titles, or dates. If a title is "Senior Software Engineer", it must remain exactly that.
-2. NEVER use explicit soft-skill headers in bullet points (e.g., do NOT write "Communication Skills: Led a team").
-3. DO weave the target job's requested attributes implicitly into action verbs and framing of REAL achievements.
-4. DO maintain ATS compatibility - use clean formatting, standard action verbs, and measurable results.
-5. DO preserve the candidate's authentic background and accomplishments.
-6. PRESERVE TECHNICAL DEPTH: If the candidate has technical skills, keep them prominent unless explicitly pivoting careers (and even then, suggest functional translations like "Technical Lead" instead of removing context entirely).
-7. AVOID clichés: No "go-getter attitude", "passionate about", "thinking outside the box", or vague soft skills.
-8. FOCUS on impact: Every bullet should have a measurable result or clear business value.
+CRITICAL FORMATTING & CONTENT CONSTRAINTS:
+1. Use ONLY standard ASCII characters. Use "●" (bullet) for all list items, never %, ○, ◆, or any special unicode.
+2. Use ONLY standard English letters, numbers, and these punctuation marks: . , - : ( ) & / 
+3. NO special characters, symbols, or unicode beyond standard ASCII.
+4. NEVER alter historical facts, metrics, job titles, or dates. If a title is "Senior Software Engineer", it must remain exactly that.
+5. NEVER use explicit soft-skill headers in bullet points (e.g., do NOT write "Communication Skills: Led a team").
+6. DO weave the target job's requested attributes implicitly into action verbs and framing of REAL achievements.
+7. DO maintain ATS compatibility - use clean formatting, standard action verbs, and measurable results.
+8. PRESERVE TECHNICAL DEPTH: If the candidate has technical skills, keep them prominent unless explicitly pivoting careers.
+9. AVOID clichés: No "go-getter attitude", "passionate about", "thinking outside the box", or vague soft skills.
+10. FOCUS on impact: Every bullet should have a measurable result or clear business value.
+11. Keep line breaks clean and consistent - one blank line between sections.
+12. Format bullets as: "● Verb phrase with measurable outcome"
 
 ${fewShotExamples}
 `
@@ -355,16 +386,19 @@ ${resume}
 ${tailoringInstructions}
 
 OUTPUT INSTRUCTIONS:
-1. Return ONLY the tailored resume text
+1. Return ONLY the tailored resume text - no preamble or explanation
 2. Keep the same structure as the original (sections, format)
 3. Weave job requirements into existing achievements - don't invent new experiences
 4. Ensure ATS compatibility with standard formatting
 5. Keep the resume to one page (max 500 words)
-6. Each bullet point should be 1-2 sentences with clear impact`
+6. Each bullet point should be 1-2 sentences with clear impact
+7. Use ONLY standard ASCII bullets (●) and characters
+8. NO special unicode characters like %, Ï, €, ™, or any symbols outside ASCII`
     );
 
     const response = await result.response;
-    return response.text();
+    const cleanedResume = cleanResumeText(response.text());
+    return cleanedResume;
   } catch (err) {
     console.error('Tailor resume error:', err);
     throw err;
@@ -374,6 +408,9 @@ OUTPUT INSTRUCTIONS:
 async function generateResumePDF(resumeText) {
   return new Promise((resolve, reject) => {
     try {
+      // Clean the text one more time before PDF generation
+      const cleanedText = cleanResumeText(resumeText);
+      
       const doc = new PDFDocument({
         size: 'letter',
         margin: 40,
@@ -392,7 +429,7 @@ async function generateResumePDF(resumeText) {
 
       doc.on('error', reject);
 
-      const lines = resumeText.split('\n');
+      const lines = cleanedText.split('\n');
 
       for (const line of lines) {
         const trimmed = line.trim();
