@@ -275,19 +275,27 @@ function deepSanitize(text) {
   text = text.replace(/Â/g, '');
   
   // Step 3: Remove control characters and non-ASCII (except common ones)
-  text = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
+  // Normalize and strip non-printable/non-ASCII characters
+  try {
+    text = text.normalize('NFKD');
+  } catch (e) {
+    // ignore if normalize not supported
+  }
+  // Keep only printable ASCII plus common whitespace (tab, \\n, \\r)
+  text = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '');
   
-  // Step 4: Replace various bullet-like characters with standard bullet
-  text = text.replace(/[•·○◦◆◎☐✓★%]/g, '');
+  // Step 4: Remove various bullet-like and problematic punctuation characters
+  text = text.replace(/[•·○◦◆◎☐✓★%©®†‡≠]/g, '');
   
   // Step 5: Fix escaped characters
   text = text.replace(/\\\$/g, '$');
   text = text.replace(/\\\*/g, '*');
   text = text.replace(/\\\-/g, '-');
   
-  // Step 6: Clean up spacing
-  text = text.replace(/\s+/g, ' ');
-  text = text.replace(/\n\s+/g, '\n');
+  // Step 6: Clean up spacing but preserve line breaks
+  // Collapse multiple spaces but keep single newlines
+  text = text.replace(/[ \t\f\v]+/g, ' ');
+  text = text.replace(/\n[ \t]+/g, '\n');
   
   // Step 7: Normalize line endings
   text = text.replace(/\r\n/g, '\n');
@@ -500,7 +508,8 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
           for (const bullet of job.bullet_points) {
             const cleanedBullet = deepSanitize(bullet);
             if (cleanedBullet) {
-              formattedResume += `● ${cleanedBullet}\n`;
+              // Each bullet point should be a plain sentence on its own line (no special characters)
+              formattedResume += `${cleanedBullet}\n`;
             }
           }
         }
@@ -601,24 +610,13 @@ async function generateResumePDF(resumeText) {
           doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke('#333333');
           doc.moveDown(0.3);
         }
-        // Bullet points
-        else if (trimmed.startsWith('●')) {
+        // Regular text (including bullet sentences produced without special characters)
+        else {
           doc.fontSize(10).font('Helvetica').fillColor('#000000');
           doc.text(trimmed, { width: 475 });
           doc.moveDown(0.15);
         }
-        // Job titles and dates (lines with years)
-        else if (trimmed.match(/.*\d{4}.*/) && !trimmed.startsWith('●')) {
-          doc.fontSize(11).font('Helvetica-Bold').fillColor('#000000');
-          doc.text(trimmed, { width: 475 });
-          doc.moveDown(0.2);
-        }
-        // Regular text
-        else {
-          doc.fontSize(10).font('Helvetica').fillColor('#000000');
-          doc.text(trimmed, { width: 475 });
-          doc.moveDown(0.2);
-        }
+        // Note: job titles and date lines matched earlier; otherwise handled above
       }
 
       doc.end();
