@@ -12,7 +12,7 @@
     "resume",
     "ai",
     "saas",
-    "claude"
+    "gemini"
   ],
   "author": "",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "@anthropic-ai/sdk": "^0.24.0",
+    "@google/generative-ai": "^0.21.0",
     "stripe": "^14.0.0",
     "pdf-parse": "^1.1.1",
     "unzipper": "^0.10.14",

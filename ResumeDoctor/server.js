@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import Stripe from 'stripe';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import unzipper from 'unzipper';
@@ -13,7 +13,7 @@ import PDFDocument from 'pdfkit';
 dotenv.config();
 
 const app = express();
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // Developer bypass for testing
@@ -259,19 +259,17 @@ function stripResume(resume) {
 
 async function extractJobRequirements(jobDescription) {
   try {
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 400,
-      messages: [{
-        role: 'user',
-        content: `Extract ONLY the key job requirements from this job posting. List: job title, required skills, experience level, key responsibilities.
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    
+    const result = await model.generateContent(
+      `Extract ONLY the key job requirements from this job posting. List: job title, required skills, experience level, key responsibilities.
 
 JOB POSTING:
 ${jobDescription.substring(0, 1500)}`
-      }]
-    });
+    );
 
-    return message.content[0].text;
+    const response = await result.response;
+    return response.text();
   } catch (err) {
     console.error('Extract requirements error:', err);
     return jobDescription.substring(0, 500);
@@ -280,22 +278,20 @@ ${jobDescription.substring(0, 1500)}`
 
 async function tailorResumeWithRequirements(resume, requirements) {
   try {
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1200,
-      messages: [{
-        role: 'user',
-        content: `You are a professional resume writer. Tailor the resume below to match the job requirements exactly. Emphasize relevant skills and experience. Keep it to one page max. Return ONLY the tailored resume text.
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    
+    const result = await model.generateContent(
+      `You are a professional resume writer. Tailor the resume below to match the job requirements exactly. Emphasize relevant skills and experience. Keep it to one page max. Return ONLY the tailored resume text.
 
 JOB REQUIREMENTS:
 ${requirements}
 
 ORIGINAL RESUME:
 ${resume}`
-      }]
-    });
+    );
 
-    return message.content[0].text;
+    const response = await result.response;
+    return response.text();
   } catch (err) {
     console.error('Tailor resume error:', err);
     throw err;
