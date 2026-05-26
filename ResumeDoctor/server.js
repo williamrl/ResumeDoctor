@@ -292,17 +292,24 @@ function deepSanitize(text) {
   text = text.replace(/\\\*/g, '*');
   text = text.replace(/\\\-/g, '-');
   
-  // Step 6: Clean up spacing but preserve line breaks
-  // Collapse multiple spaces but keep single newlines
-  text = text.replace(/[ \t\f\v]+/g, ' ');
-  text = text.replace(/\n[ \t]+/g, '\n');
+  // Step 6: Clean up spacing but preserve line breaks and up to two leading spaces (for simple indentation)
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const leading = (line.match(/^\s*/)[0] || '').slice(0, 2); // keep up to two leading spaces
+    const trimmed = line.trim();
+    // collapse internal whitespace to single spaces
+    const collapsed = trimmed.replace(/\s+/g, ' ');
+    lines[i] = leading + collapsed;
+  }
+  text = lines.join('\n');
   
   // Step 7: Normalize line endings
   text = text.replace(/\r\n/g, '\n');
   text = text.replace(/\r/g, '\n');
   
   // Step 8: Remove multiple blank lines
-  text = text.replace(/\n\n\n+/g, '\n\n');
+  text = text.replace(/\n{3,}/g, '\n\n');
   
   return text.trim();
 }
@@ -494,7 +501,7 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
 
     // Experience
     if (resumeData.experience && Array.isArray(resumeData.experience)) {
-      formattedResume += 'EXPERIENCE\n';
+      formattedResume += 'EXPERIENCE\n\n';
       for (const job of resumeData.experience) {
         const title = deepSanitize(job.job_title || '');
         const company = deepSanitize(job.company || '');
@@ -503,13 +510,13 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
         
         formattedResume += `${title} | ${company}\n`;
         formattedResume += `${location} | ${dateRange}\n`;
-        
+        formattedResume += '\n';
         if (job.bullet_points && Array.isArray(job.bullet_points)) {
           for (const bullet of job.bullet_points) {
             const cleanedBullet = deepSanitize(bullet);
             if (cleanedBullet) {
-              // Each bullet point should be a plain sentence on its own line (no special characters)
-              formattedResume += `${cleanedBullet}\n`;
+              // Prefix bullets with a single ASCII hyphen for readability
+              formattedResume += `- ${cleanedBullet}\n`;
             }
           }
         }
@@ -519,7 +526,7 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
 
     // Skills
     if (resumeData.skills && Array.isArray(resumeData.skills)) {
-      formattedResume += 'SKILLS\n';
+      formattedResume += 'SKILLS\n\n';
       for (const skillCategory of resumeData.skills) {
         if (skillCategory.category) {
           const category = deepSanitize(skillCategory.category);
@@ -535,7 +542,7 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
 
     // Education
     if (resumeData.education && Array.isArray(resumeData.education)) {
-      formattedResume += 'EDUCATION\n';
+      formattedResume += 'EDUCATION\n\n';
       for (const edu of resumeData.education) {
         const degree = deepSanitize(edu.degree || '');
         const school = deepSanitize(edu.school || '');
