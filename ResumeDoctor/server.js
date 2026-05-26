@@ -252,19 +252,16 @@ async function parseResumeFile(fileBuffer, mimeType, filename) {
 
 function stripResume(resume) {
   if (!resume) return '';
+  resume = deepSanitize(resume);
   let stripped = resume.replace(/\n{3,}/g, '\n\n').trim();
   let lines = stripped.split('\n').filter(line => line.trim().length > 0);
   return lines.join('\n');
 }
 
-// AGGRESSIVE SANITIZATION - strips ALL weird characters
 function deepSanitize(text) {
   if (!text) return '';
   
-  // Step 1: Remove all known bad prefixes and unicode pairs
-  text = text.replace(/^[\s%Ï•·○◦◆◎☐✓★]*\s*/gm, '');
-  
-  // Step 2: Remove specific bad character sequences
+  // Step 1: Remove known bad sequences
   text = text.replace(/%Ï/g, '');
   text = text.replace(/Ã¯/g, '');
   text = text.replace(/â\x80/g, '');
@@ -274,44 +271,70 @@ function deepSanitize(text) {
   text = text.replace(/™/g, '');
   text = text.replace(/Â/g, '');
   
-  // Step 3: Remove control characters and non-ASCII (except common ones)
-  // Normalize and strip non-printable/non-ASCII characters
+  // Step 2: Normalize unicode and keep only printable ASCII
   try {
     text = text.normalize('NFKD');
   } catch (e) {
     // ignore if normalize not supported
   }
-  // Keep only printable ASCII plus common whitespace (tab, \\n, \\r)
   text = text.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, '');
   
-  // Step 4: Remove various bullet-like and problematic punctuation characters
+  // Step 3: Remove problematic characters
   text = text.replace(/[•·○◦◆◎☐✓★%©®†‡≠]/g, '');
   
-  // Step 5: Fix escaped characters
+  // Step 4: Fix escaped characters
   text = text.replace(/\\\$/g, '$');
   text = text.replace(/\\\*/g, '*');
   text = text.replace(/\\\-/g, '-');
   
-  // Step 6: Clean up spacing but preserve line breaks and up to two leading spaces (for simple indentation)
+  // Step 5: Clean spacing while preserving structure
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const leading = (line.match(/^\s*/)[0] || '').slice(0, 2); // keep up to two leading spaces
+    const leading = (line.match(/^\s*/)[0] || '').slice(0, 2);
     const trimmed = line.trim();
-    // collapse internal whitespace to single spaces
     const collapsed = trimmed.replace(/\s+/g, ' ');
     lines[i] = leading + collapsed;
   }
   text = lines.join('\n');
   
-  // Step 7: Normalize line endings
+  // Step 6: Normalize line endings
   text = text.replace(/\r\n/g, '\n');
   text = text.replace(/\r/g, '\n');
   
-  // Step 8: Remove multiple blank lines
+  // Step 7: Remove multiple blank lines
   text = text.replace(/\n{3,}/g, '\n\n');
   
   return text.trim();
+}
+
+// POST-PROCESS: Convert spelled-out numbers to proper format
+function polishResumeNumbers(text) {
+  if (!text) return '';
+  
+  // Convert 'X percent' to 'X%'
+  text = text.replace(/(\d+)\s+percent/gi, '$1%');
+  
+  // Convert 'X dollars' to '$X' with commas for thousands
+  text = text.replace(/(\d+)\s+dollars/gi, (match, num) => {
+    const numInt = parseInt(num);
+    return '$' + numInt.toLocaleString();
+  });
+  
+  // Convert 'X million' to 'XM'
+  text = text.replace(/(\d+)\s+million/gi, '$1M');
+  
+  // Convert 'X thousand' to 'X,XXX' format
+  text = text.replace(/(\d+)\s+thousand/gi, (match, num) => {
+    return (parseInt(num) * 1000).toLocaleString();
+  });
+  
+  // Fix any remaining large numbers without commas (5 or more digits)
+  text = text.replace(/\b(\d{5,})\b/g, (match) => {
+    return parseInt(match).toLocaleString();
+  });
+  
+  return text;
 }
 
 function detectTechRole(jobDescription) {
@@ -324,7 +347,7 @@ function detectTechRole(jobDescription) {
 const fewShotExamples = `
 EXAMPLE 1 - GOOD TAILORING (Tech Role):
 Original: "Managed team of 5 developers and handled project timelines"
-Tailored for "Senior Backend Engineer": "Led team of 5 backend engineers through microservices migration to AWS, ensuring zero downtime and 30 percent reduction in deployment time"
+Tailored for "Senior Backend Engineer": "Led team of 5 backend engineers through microservices migration to AWS, ensuring zero downtime and 30% reduction in deployment time"
 Why it works: Keeps the truth (team of 5, leadership), adds technical depth matching the role.
 
 EXAMPLE 2 - GOOD TAILORING (Soft Skills Weaving):
@@ -375,7 +398,7 @@ const tailoredResumeSchema = {
   properties: {
     professional_summary: {
       type: 'string',
-      description: 'Professional summary paragraph with no special characters'
+      description: 'Professional summary paragraph - clean ASCII only. Use numeric symbols like $ 50,000 or 35%, never spell out numbers'
     },
     experience: {
       type: 'array',
@@ -389,18 +412,21 @@ const tailoredResumeSchema = {
           bullet_points: {
             type: 'array',
             items: { type: 'string' },
-            description: 'Clean text strings with no markdown or special characters'
+            description: 'Clean text strings. Use numeric symbols: $50,000 not 50000 dollars, 35% not 35 percent, 2M+ not 2 million'
           }
         }
       }
     },
     skills: {
-      type: 'object',
-      properties: {
-        category: { type: 'string' },
-        items: {
-          type: 'array',
-          items: { type: 'string' }
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          category: { type: 'string' },
+          items: {
+            type: 'array',
+            items: { type: 'string' }
+          }
         }
       }
     },
@@ -437,15 +463,19 @@ CRITICAL CONSTRAINTS:
 3. DO weave the target job's requested attributes implicitly into action verbs.
 4. PRESERVE TECHNICAL DEPTH for tech roles.
 
-ABSOLUTE FORMATTING RULES:
+NUMERICAL FORMATTING CONSTRAINTS - CRITICAL:
+- Do NOT spell out currency, percentages, or high counts.
+- Use standard numeric symbols ONLY.
+- Format money as: $50,000 (with commas for thousands), never "50000 dollars"
+- Format percentages as: 35%, never "35 percent"
+- Format large counts as: 2M+, 10,000, 1.5K (with commas), never "2 million" or "10000"
+- Do NOT use backslashes to escape these symbols
+
+FORMATTING RULES:
 - Output ONLY clean ASCII text
-- NO special characters, unicode, symbols, or encoding artifacts
+- NO special characters, unicode, or encoding artifacts
 - NO markdown bullets, asterisks, or dashes
-- NO escaped characters
-- NO percent signs
-- NO curly braces
 - Each bullet point is a plain English sentence
-- Use the JSON structure provided - fill each field with plain strings only
 
 ${fewShotExamples}
 `
@@ -468,7 +498,7 @@ ${resume}
 
 ${tailoringInstructions}
 
-Return ONLY a valid JSON object following the provided schema. Each text field must contain ONLY clean English text with NO special characters, NO markdown, and NO symbols.`
+Return ONLY a valid JSON object following the provided schema. Each text field must contain ONLY clean English text with NO special characters. Use proper numeric formatting: $50,000, 35%, 2M+`
         }]
       }],
       generationConfig: {
@@ -485,18 +515,26 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
       resumeData = JSON.parse(jsonText);
     } catch (e) {
       console.error('Failed to parse JSON response:', e);
-      console.error('Raw response:', jsonText);
       return jsonText;
     }
 
-    // Convert structured output back to formatted resume text with deep sanitization
+    // Convert structured output back to formatted resume text
     let formattedResume = '';
+
+    // Extract name from resume or use placeholder
+    const nameMatch = resumeData.professional_summary?.match(/^([A-Z][a-z]+ [A-Z][a-z]+)/);
+    const name = nameMatch ? nameMatch[1] : 'YOUR NAME';
+    
+    // CONTACT HEADER
+    formattedResume += name.toUpperCase() + '\n';
+    formattedResume += 'City, State | (555) 123-4567 | email@example.com | linkedin.com/in/yourprofile\n\n';
 
     // Professional Summary
     if (resumeData.professional_summary) {
       formattedResume += 'PROFESSIONAL SUMMARY\n';
       const cleanedSummary = deepSanitize(resumeData.professional_summary);
-      formattedResume += cleanedSummary + '\n\n';
+      const polishedSummary = polishResumeNumbers(cleanedSummary);
+      formattedResume += polishedSummary + '\n\n';
     }
 
     // Experience
@@ -511,11 +549,12 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
         formattedResume += `${title} | ${company}\n`;
         formattedResume += `${location} | ${dateRange}\n`;
         formattedResume += '\n';
+        
         if (job.bullet_points && Array.isArray(job.bullet_points)) {
           for (const bullet of job.bullet_points) {
-            const cleanedBullet = deepSanitize(bullet);
+            let cleanedBullet = deepSanitize(bullet);
+            cleanedBullet = polishResumeNumbers(cleanedBullet);
             if (cleanedBullet) {
-              // Prefix bullets with a single ASCII hyphen for readability
               formattedResume += `- ${cleanedBullet}\n`;
             }
           }
@@ -531,7 +570,7 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
         if (skillCategory.category) {
           const category = deepSanitize(skillCategory.category);
           formattedResume += `${category}: `;
-          if (skillCategory.items) {
+          if (skillCategory.items && Array.isArray(skillCategory.items)) {
             const items = skillCategory.items.map(item => deepSanitize(item)).join(', ');
             formattedResume += items + '\n';
           }
@@ -564,12 +603,12 @@ Return ONLY a valid JSON object following the provided schema. Each text field m
       for (const cert of resumeData.certifications) {
         const cleanedCert = deepSanitize(cert);
         if (cleanedCert) {
-          formattedResume += `● ${cleanedCert}\n`;
+          formattedResume += `- ${cleanedCert}\n`;
         }
       }
     }
 
-    return deepSanitize(formattedResume);
+    return polishResumeNumbers(deepSanitize(formattedResume));
   } catch (err) {
     console.error('Tailor resume error:', err);
     throw err;
@@ -600,6 +639,7 @@ async function generateResumePDF(resumeText) {
       doc.on('error', reject);
 
       const lines = cleanedText.split('\n');
+      let isFirstLine = true;
 
       for (const line of lines) {
         const trimmed = line.trim();
@@ -609,21 +649,45 @@ async function generateResumePDF(resumeText) {
           continue;
         }
 
-        // Section headers (all caps)
-        if (/^[A-Z\s]+$/.test(trimmed) && trimmed.length > 3 && !trimmed.includes('|')) {
+        // Contact header (first line, all caps)
+        if (isFirstLine && /^[A-Z\s]+$/.test(trimmed)) {
+          doc.fontSize(14).font('Helvetica-Bold').text(trimmed);
+          doc.moveDown(0.1);
+          isFirstLine = false;
+        }
+        // Contact info line (has pipes or @ symbol)
+        else if (trimmed.includes('|') || trimmed.includes('@')) {
+          doc.fontSize(9).font('Helvetica').text(trimmed);
+          doc.moveDown(0.15);
+        }
+        // Section headers (all caps, no pipes, length > 3)
+        else if (/^[A-Z\s]+$/.test(trimmed) && trimmed.length > 3) {
           doc.moveDown(0.2);
           doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000');
           doc.text(trimmed);
           doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke('#333333');
           doc.moveDown(0.3);
         }
-        // Regular text (including bullet sentences produced without special characters)
-        else {
+        // Job title/company lines (contain pipe)
+        else if (trimmed.includes('|') && !trimmed.includes('@')) {
+          doc.fontSize(11).font('Helvetica-Bold').fillColor('#000000');
+          doc.text(trimmed, { width: 475 });
+          doc.moveDown(0.2);
+        }
+        // Bullet points (start with dash)
+        else if (trimmed.startsWith('-')) {
           doc.fontSize(10).font('Helvetica').fillColor('#000000');
           doc.text(trimmed, { width: 475 });
           doc.moveDown(0.15);
         }
-        // Note: job titles and date lines matched earlier; otherwise handled above
+        // Regular text
+        else {
+          doc.fontSize(10).font('Helvetica').fillColor('#000000');
+          doc.text(trimmed, { width: 475 });
+          doc.moveDown(0.2);
+        }
+        
+        isFirstLine = false;
       }
 
       doc.end();
@@ -640,7 +704,6 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     console.log('=== TAILOR RESUME REQUEST ===');
     console.log('userId:', userId);
     console.log('jobDescription length:', jobDescription ? jobDescription.length : 0);
-    console.log('jobUrl:', jobUrl);
     console.log('file uploaded:', req.file ? 'yes' : 'no');
     
     if (!userId) {
@@ -660,59 +723,24 @@ app.post('/api/tailor-resume', upload.single('resume'), async (req, res) => {
     // Parse resume file
     let resumeContent = '';
     if (req.file) {
-      console.log('Parsing file:', req.file.originalname, 'Size:', req.file.size, 'MIME:', req.file.mimetype);
+      console.log('Parsing file:', req.file.originalname);
       resumeContent = await parseResumeFile(req.file.buffer, req.file.mimetype, req.file.originalname);
-      console.log('Resume extracted:', resumeContent ? resumeContent.length : 0, 'characters');
       
       if (!resumeContent) {
-        console.log('Failed to extract resume content');
         return res.status(400).json({ error: 'Unable to parse resume file. Please try a PDF or TXT format.' });
       }
     } else {
-      console.log('No file uploaded in request');
       return res.status(400).json({ error: 'Please upload a resume file.' });
     }
 
     const trimmedResume = resumeContent.trim();
-    console.log('Trimmed resume length:', trimmedResume.length);
     
     if (trimmedResume.length < 50) {
-      return res.status(400).json({ error: 'Resume content is too short (minimum 50 characters). Extracted: ' + trimmedResume.length + ' characters.' });
+      return res.status(400).json({ error: 'Resume content is too short (minimum 50 characters).' });
     }
 
     let finalJobDescription = jobDescription;
     
-    // Extract from URL if provided
-    if (jobUrl && !jobDescription) {
-      try {
-        const response = await fetch(jobUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
-        });
-        const html = await response.text();
-        
-        // Extract text from HTML
-        const text = html
-          .replace(/<script[^>]*>.*?<\/script>/gs, '')
-          .replace(/<style[^>]*>.*?<\/style>/gs, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/&nbsp;/g, ' ')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&amp;/g, '&')
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        if (text && text.length > 200) {
-          finalJobDescription = text.substring(0, 3000);
-        }
-      } catch (err) {
-        console.error('URL extraction error:', err);
-      }
-    }
-
-    // Validate job description
     if (!finalJobDescription || finalJobDescription.trim().length < 50) {
       return res.status(400).json({ 
         error: 'Job description is required. Please paste the full job description.' 
